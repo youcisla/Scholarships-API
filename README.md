@@ -1,0 +1,2 @@
+# Scholarships-API
+Scholarships API
