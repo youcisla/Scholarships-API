@@ -2,7 +2,6 @@
 
 This document describes the Scholarships API endpoint for listing scholarships.
 
-- Base path: use relative paths only
 - Endpoint: GET /api/v2/scholarships
 
 ## Authentication
@@ -14,7 +13,6 @@ OAuth 2.0 Client Credentials flow.
   - grant_type=client_credentials
   - client_id=YOUR_CLIENT_ID
   - client_secret=YOUR_CLIENT_SECRET
-  - scope (optional): include only if your authorization server requires it. The token must grant the scope scholarships:read.
 
 API requests must include:
 - Authorization: Bearer <access_token>
