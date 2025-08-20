@@ -6,32 +6,24 @@ This document describes the Scholarships API endpoint for listing scholarships.
 
 ## Authentication
 
-OAuth 2.0 Client Credentials flow.
+Basic Authentication (no OAuth 2.0).
 
-- Token URL (placeholder): https://<idp>/oauth2/token
-- Request body (x-www-form-urlencoded):
-  - grant_type=client_credentials
-  - client_id=YOUR_CLIENT_ID
-  - client_secret=YOUR_CLIENT_SECRET
+- Username: YOUR_CLIENT_ID
+- Password: YOUR_CLIENT_SECRET
+- Header (automatically set by most clients): Authorization: Basic base64(client_id:client_secret)
 
-API requests must include:
-- Authorization: Bearer <access_token>
+Authorization failures:
+- 401 Unauthorized: Missing/invalid credentials
+- 403 Forbidden: Authenticated but missing required scope (scholarships:read, if enforced)
 
-401 Unauthorized: Returned when the token is missing or invalid.
+### Example (curl on Windows cmd)
 
-### Token acquisition (curl)
-
+Use -u to send Basic credentials:
 ```bash
-# Obtain an access token (example)
-curl -X POST "https://<idp>/oauth2/token" ^
-  -H "Content-Type: application/x-www-form-urlencoded" ^
-  --data-urlencode "grant_type=client_credentials" ^
-  --data-urlencode "client_id=YOUR_CLIENT_ID" ^
-  --data-urlencode "client_secret=YOUR_CLIENT_SECRET" ^
-  --data-urlencode "scope=scholarships:read"
+curl -X GET "https://<BASE_HOST>/api/v2/scholarships?limit=20&offset=0" ^
+  -u "YOUR_CLIENT_ID:YOUR_CLIENT_SECRET" ^
+  -H "Accept: application/json"
 ```
-
-The response should include an access token usable as a Bearer token.
 
 ## Endpoint
 
@@ -39,16 +31,17 @@ GET /api/v2/scholarships
 
 ### Query parameters
 
-| Name         | Type     | Required | Default | Constraints            | Description                                                                 |
-|--------------|----------|----------|---------|------------------------|-----------------------------------------------------------------------------|
-| search_text  | string   | no       | —       | —                      | Case-insensitive “contains” across relevant scholarship text fields.        |
-| updated_from | datetime (UTC, ISO 8601) | no | — | inclusive lower bound | Inclusive lower bound compared to the scholarship updatedDate.              |
-| updated_to   | datetime (UTC, ISO 8601) | no | — | inclusive upper bound | Inclusive upper bound compared to the scholarship updatedDate.              |
-| limit        | integer  | no       | 20      | 1..200                 | Page size. Capped at 200.                                                   |
-| offset       | integer  | no       | 0       | ≥ 0                    | Zero-based offset into the filtered result set.                             |
+| Name         | Type                     | Required | Default | Constraints | Description                                                                                  |
+|--------------|--------------------------|----------|---------|-------------|----------------------------------------------------------------------------------------------|
+| search_text  | string                   | no       | —       | —           | Case-insensitive “contains” across scholarship text. Aliases: search, q                      |
+| updated_from | datetime (UTC, ISO 8601) | no       | —       | inclusive   | Inclusive lower bound on updatedDate. Alias: from                                            |
+| updated_to   | datetime (UTC, ISO 8601) | no       | —       | inclusive   | Inclusive upper bound on updatedDate. Alias: to                                              |
+| limit        | integer                  | no       | 20      | 1..200      | Page size (capped at 200)                                                                    |
+| offset       | integer                  | no       | 0       | ≥ 0         | Zero-based offset into the filtered result set                                               |
 
 Notes:
 - If updated_from and updated_to are both provided, updated_from must be <= updated_to.
+- Sorting is deterministic: updatedDate DESC, code ASC, id ASC.
 
 ### Response
 
@@ -89,18 +82,18 @@ Arrays (UPPERCASE):
 - NATIONALITY: string[], non-null. ISO3 nationality codes.
 
 Program-derived (UPPERCASE):
-- PROGRAM_IDS: integer[], non-null (may be empty). Program IDs linked via scholarshipPrograms.
-- ACCEPTS_CURRENT_TERM: "1" | "0" | null. Aggregate of program flags (1 if any program is true, 0 if any are false and none true, null if none present).
+- PROGRAM_IDS: integer[], non-null (may be empty).
+- ACCEPTS_CURRENT_TERM: "1" | "0" | null. Aggregate of program flags.
 - ACCEPTS_CURRENT_TERM_LIST: string[], non-null. Per-program flags as "1"/"0".
-- APPLICATION_ONLINE: "1" | "0" | null. Aggregate of program applicationOnline flags (same aggregation logic).
+- APPLICATION_ONLINE: "1" | "0" | null. Aggregate of applicationOnline flags.
 - APPLICATION_ONLINE_LIST: string[], non-null. Per-program flags as "1"/"0".
-- FUND_ACCOUNT_CODE: string[], non-null. Distinct fund account codes from programs.
-- SERVICE_INDICATOR_REFERENCE: string[], non-null. Distinct service indicator references.
+- FUND_ACCOUNT_CODE: string[], non-null.
+- SERVICE_INDICATOR_REFERENCE: string[], non-null.
 - SUPPORT_DOCUMENT_DEADLINE: string[], non-null. Dates as "Y-m-d".
-- TYPE: string[], non-null. Distinct program types (enum values).
-- FREQUENCY: string[], non-null. Distinct frequencies (enum values).
-- VALID_UNTIL: string[], non-null. Distinct valid-until values (enum values).
-- DECISION_BY: string[], non-null. Distinct decision-by values (enum values).
+- TYPE: string[], non-null.
+- FREQUENCY: string[], non-null.
+- VALID_UNTIL: string[], non-null.
+- DECISION_BY: string[], non-null.
 
 Additional (UPPERCASE):
 - IS_INSEAD_MANAGED: boolean, nullable.
@@ -116,7 +109,7 @@ Additional (UPPERCASE):
 - IS_SUPPORT_DOCUMENT_REQUIRED: boolean, nullable.
 
 CamelCase fields (complete set):
-- id: integer, nullable. Scholarship ID.
+- id: integer, nullable.
 - code: string, nullable.
 - title: string, nullable.
 - isInseadManaged: boolean, nullable.
@@ -145,7 +138,7 @@ CamelCase fields (complete set):
 - campuses: string[], non-null.
 
 Nested programs:
-- scholarshipPrograms: array of objects, non-null (may be empty). Each item:
+- scholarshipPrograms: array<object>, non-null (may be empty). Each item:
   - programId: integer, nullable.
   - programCode: string, nullable.
   - career: string, nullable.
@@ -164,24 +157,23 @@ Nested programs:
 
 ### Examples
 
-Note: Use a relative path. If needed, define a base URL in your client.
+Note: Use a relative path; define a base URL in your client if needed.
 
-#### List scholarships (curl)
+#### List scholarships (curl, Basic auth)
 
 ```bash
-# <BASE_URL> is the server root (not included in the request path below)
-curl -X GET "/api/v2/scholarships?limit=20&offset=0&search_text=need&updated_from=2025-01-01T00:00:00Z" ^
-  -H "Authorization: Bearer <access_token>" ^
+curl -X GET "https://<BASE_HOST>/api/v2/scholarships?limit=20&offset=0&search_text=need&updated_from=2025-01-01T00:00:00Z" ^
+  -u "YOUR_CLIENT_ID:YOUR_CLIENT_SECRET" ^
   -H "Accept: application/json"
 ```
 
-#### List scholarships (JavaScript fetch)
+#### List scholarships (JavaScript fetch, Basic auth)
 
 ```javascript
-// const BASE_URL = 'https://your-api';
+const creds = btoa('YOUR_CLIENT_ID:YOUR_CLIENT_SECRET');
 const res = await fetch('/api/v2/scholarships?limit=20&offset=0', {
   headers: {
-    'Authorization': 'Bearer <access_token>',
+    'Authorization': `Basic ${creds}`,
     'Accept': 'application/json'
   }
 });
@@ -189,18 +181,15 @@ const data = await res.json();
 console.log(data);
 ```
 
-#### List scholarships (Python requests)
+#### List scholarships (Python requests, Basic auth)
 
 ```python
 import requests
 
-# BASE_URL = 'https://your-api'
 resp = requests.get(
-    '/api/v2/scholarships',
-    headers={
-        'Authorization': 'Bearer <access_token>',
-        'Accept': 'application/json'
-    },
+    'https://<BASE_HOST>/api/v2/scholarships',
+    auth=('YOUR_CLIENT_ID', 'YOUR_CLIENT_SECRET'),
+    headers={'Accept': 'application/json'},
     params={
         'limit': 20,
         'offset': 0,
@@ -319,6 +308,7 @@ print(resp.json())
 - 200 OK
 - 400 Bad Request — e.g., invalid datetime format, or updated_from > updated_to.
 - 401 Unauthorized
+- 403 Forbidden
 - 404 Not Found
 - 500 Internal Server Error
 
@@ -326,4 +316,4 @@ print(resp.json())
 
 - Sorting is deterministic: results are ordered by updatedDate DESC, code ASC, id ASC.
 - hasNext is computed as (offset + limit) < total.
-- Only the query parameters listed above are supported for this documentation scope. No undocumented parameters, aliases, or diagnostics are exposed here.
+- Only the parameters listed above are supported here. Aliases: search_text (search, q), updated_from (from), updated_to (to).
