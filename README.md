@@ -1,91 +1,131 @@
-## Scholarships API (v2)
+# Scholarships API (v2)
 
-This document describes the Scholarships API endpoint for listing scholarships.
+This document describes the Scholarships API endpoints for exporting the scholarship catalogue.
 
-- Endpoint: GET /api/v2/scholarships
+- Base path: /api/v2
+- Endpoints:
+  - GET /api/v2/scholarships — paginated list
+  - GET /api/v2/scholarships/all — full export (no pagination; streams internally)
 
 ## Authentication
 
-Basic Authentication (no OAuth 2.0).
+Authorization header is required. Two modes are supported by the current implementation:
 
-- Username: YOUR_CLIENT_ID
-- Password: YOUR_CLIENT_SECRET
-- Header (automatically set by most clients): Authorization: Basic base64(client_id:client_secret)
+- Basic authentication
+  - Header: Authorization: Basic base64(client_id:client_secret)
+  - The provided client_id/client_secret must match a configured API client and must include the scope scholarships:read.
+- Bearer token (optional, only when enabled)
+  - Header: Authorization: Bearer <token>
+  - Accepted forms:
+    - HS256 JWT signed with configured jwt_key
+    - Opaque token matching either a configured explicit token or base64(client_id:client_secret) for a configured client
+  - Bearer is rejected when the instance is configured as Basic-only.
+
+Required scope for both modes: scholarships:read
 
 Authorization failures:
-- 401 Unauthorized: Missing/invalid credentials
-- 403 Forbidden: Authenticated but missing required scope (scholarships:read, if enforced)
+- 401 Unauthorized — missing/invalid Authorization header, invalid credentials/token
+- 403 Forbidden — authenticated but missing required scope
 
-### Example (curl on Windows cmd)
+### Examples (Windows cmd)
 
-Use -u to send Basic credentials:
-```bash
+Basic auth with -u:
+
+```bat
 curl -X GET "https://<BASE_HOST>/api/v2/scholarships?limit=20&offset=0" ^
   -u "YOUR_CLIENT_ID:YOUR_CLIENT_SECRET" ^
   -H "Accept: application/json"
 ```
 
-## Endpoint
+Bearer token (if enabled):
 
-GET /api/v2/scholarships
+```bat
+curl -X GET "https://<BASE_HOST>/api/v2/scholarships?limit=50" ^
+  -H "Authorization: Bearer %YOUR_TOKEN%" ^
+  -H "Accept: application/json"
+```
 
-### Query parameters
+## Endpoints
 
-| Name         | Type                     | Required | Default | Constraints | Description                                                                                  |
-|--------------|--------------------------|----------|---------|-------------|----------------------------------------------------------------------------------------------|
-| search_text  | string                   | no       | —       | —           | Case-insensitive “contains” across scholarship text. Aliases: search, q                      |
-| updated_from | datetime (UTC, ISO 8601) | no       | —       | inclusive   | Inclusive lower bound on updatedDate. Alias: from                                            |
-| updated_to   | datetime (UTC, ISO 8601) | no       | —       | inclusive   | Inclusive upper bound on updatedDate. Alias: to                                              |
-| limit        | integer                  | no       | 20      | 1..200      | Page size (capped at 200)                                                                    |
-| offset       | integer                  | no       | 0       | ≥ 0         | Zero-based offset into the filtered result set                                               |
+### GET /api/v2/scholarships
+
+Paginated list, sorted deterministically by updatedDate DESC, code ASC, id ASC.
+
+Query parameters:
+
+| Name | Type | Req | Default | Constraints | Description |
+|------|------|-----|---------|-------------|-------------|
+| limit | integer | no | 20 | 1..200 | Page size; alias: per_page |
+| offset | integer | no | 0 | ≥ 0 | Zero-based offset into filtered set |
+| search_text | string | no | — | — | Case-insensitive contains across core fields and related program data; aliases: search, q |
+| updated_from | datetime (ISO 8601) | no | — | inclusive | Inclusive lower bound on updatedDate; alias: from |
+| updated_to | datetime (ISO 8601) | no | — | inclusive | Inclusive upper bound on updatedDate; alias: to |
+| fields | string | no | — | mask | Inclusion mask for response projection; comma-separated paths with dot-notation and "*" wildcards |
+| exclude | string | no | — | mask | Exclusion mask applied after fields |
+
+Additional filters (all optional; comma-separated lists are supported where noted):
+
+- Scholarship string fields (LIKE): title, code, description, eligibility, criteria, amount, amount_of_award, application_format, footer, file_url, image_path, image_url, start_year
+- Scholarship booleans (accepted values: 1/0, true/false, yes/no, y/n): is_active, is_valid, is_insead_managed, display_new, is_online, is_application_view, is_support_document_required
+- Relations (comma-separated): region, grouping, gender, nationality, campus
+  - Aliases: regions→region, groups/groupings→grouping, genders→gender, nationalities→nationality, campuses→campus
+- Program-derived filters:
+  - LIKE: fund_account_code, service_indicator_reference, deadlines
+  - Booleans: accepts_current_term, application_online
+  - Enums/lists (comma-separated): type, frequency, valid_until, decision_by
+  - Dates: support_document_deadline (exact Y-m-d), support_document_deadline_from (>=), support_document_deadline_to (<=)
+  - Program selectors: program_ids (ids list), program_code (LIKE, comma-separated), program_code_exact (exact match list)
+  - Aliases: program_id→program_ids, programme/program→program_code, programme_exact/program_exact→program_code_exact
 
 Notes:
 - If updated_from and updated_to are both provided, updated_from must be <= updated_to.
-- Sorting is deterministic: updatedDate DESC, code ASC, id ASC.
+- Date parsing accepts common ISO-8601 formats and Y-m-d.
 
-### Response
+Response envelope:
 
-Envelope:
+| Field | Type | Description |
+|-------|------|-------------|
+| total | integer | Total number of records after filters |
+| hasNext | boolean | True when (offset + limit) < total |
+| items | array | Array of Scholarship objects |
 
-| Field   | Type     | Description                                                          |
-|---------|----------|----------------------------------------------------------------------|
-| total   | integer  | Total number of records after applying filters.                      |
-| hasNext | boolean  | true when (offset + limit) < total.                                  |
-| items   | array    | Array of Scholarship objects.                                        |
+### GET /api/v2/scholarships/all
 
-### Scholarship object
+Returns the full result set using internal batching (200 per batch). Query parameters are the same as the paginated endpoint except limit/offset are ignored. hasNext is always false.
 
-Every Scholarship item includes all fields listed below exactly as serialized by the current implementation. Field casing is preserved. Types and nullability reflect runtime behavior.
+## Scholarship object
 
-Core “sample-compatible” fields (UPPERCASE):
-- NO: string, non-null. Line number for the current page (stringified), falls back to entity id when available.
+Fields are returned in the following UPPER_CASE shape. Types and nullability reflect current runtime behavior.
+
+Core fields:
+- NO: string, non-null. Scholarship id as string when available; otherwise a 1-based sequence number within this response.
 - TITLE: string, nullable. Scholarship title.
-- DESCRIPTION: string, nullable. Rich/long description for display.
-- CRITERIA: string, nullable. Special criteria text.
+- DESCRIPTION: string, nullable. Rich/long display description.
+- CRITERIA: string, nullable. Special criteria text (display).
 - SCHOLARSHIP_CODE: string, nullable. Scholarship code.
-- ELIGIBILITY: string, nullable. Eligibility description.
-- AMOUNT_OF_AWARD: string, nullable. Human-readable award amount (or amount if display value missing).
+- ELIGIBILITY: string, nullable. Eligibility description (display).
+- AMOUNT_OF_AWARD: string, nullable. Human-readable award amount (or amount if display missing).
 - AMOUNT: string, nullable. Raw amount string.
-- DEADLINES: string, nullable. A primary deadline (first found among program links).
+- DEADLINES: string, nullable. Primary deadline (first found among program links).
 - DEADLINES_LIST: string[], non-null (may be empty). All distinct deadlines linked via programs.
-- GROUPINGS: string, nullable. A primary grouping (first found among groups).
+- GROUPINGS: string, nullable. Primary grouping (first found among groups).
 - APPLICATION_FORMAT: string, nullable. How to apply (display text).
-- PROGRAMME: string, nullable. A primary programme/career value (lowercased).
+- PROGRAMME: string, nullable. Primary programme/career value (lowercased).
 - IS_ACTIVE: "1" or "0", non-null. Active flag as string.
-- UPDATED_DATE: string, nullable. Last update in "Y-m-d H:i:s" format.
+- UPDATED_DATE: string, nullable. Last update in "Y-m-d H:i:s".
 
-Arrays (UPPERCASE):
+Arrays:
 - REGION: string[], non-null. Regions (labels).
 - GROUPING: string[], non-null. Groupings (labels).
 - GENDER: string[], non-null. Genders (labels).
 - CAMPUS: string[], non-null. Campus codes (deduplicated).
 - NATIONALITY: string[], non-null. ISO3 nationality codes.
 
-Program-derived (UPPERCASE):
+Program-derived (aggregated across links):
 - PROGRAM_IDS: integer[], non-null (may be empty).
 - ACCEPTS_CURRENT_TERM: "1" | "0" | null. Aggregate of program flags.
 - ACCEPTS_CURRENT_TERM_LIST: string[], non-null. Per-program flags as "1"/"0".
-- APPLICATION_ONLINE: "1" | "0" | null. Aggregate of applicationOnline flags.
+- APPLICATION_ONLINE: "1" | "0" | null. Aggregate of program flags.
 - APPLICATION_ONLINE_LIST: string[], non-null. Per-program flags as "1"/"0".
 - FUND_ACCOUNT_CODE: string[], non-null.
 - SERVICE_INDICATOR_REFERENCE: string[], non-null.
@@ -95,7 +135,7 @@ Program-derived (UPPERCASE):
 - VALID_UNTIL: string[], non-null.
 - DECISION_BY: string[], non-null.
 
-Additional (UPPERCASE):
+Additional:
 - IS_INSEAD_MANAGED: boolean, nullable.
 - IS_VALID: boolean, nullable.
 - DISPLAY_NEW: boolean, nullable.
@@ -108,66 +148,48 @@ Additional (UPPERCASE):
 - START_YEAR: string (length 4), nullable.
 - IS_SUPPORT_DOCUMENT_REQUIRED: boolean, nullable.
 
-CamelCase fields (complete set):
-- id: integer, nullable.
-- code: string, nullable.
-- title: string, nullable.
-- isInseadManaged: boolean, nullable.
-- isActive: boolean, nullable.
-- isValid: boolean, nullable.
-- displayNew: boolean, nullable.
-- displaySpecialCriteria: string, nullable.
-- displayDescription: string, nullable.
-- displayEligibility: string, nullable.
-- displayAmountAwarded: string, nullable.
-- isOnline: boolean, nullable.
-- displayApplicationFormat: string, nullable.
-- displayFooter: string, nullable.
-- displayFileUrl: string, nullable.
-- displayImagePath: string, nullable.
-- displayImageUrl: string, nullable.
-- isApplicationView: boolean, nullable.
-- updatedDate: string (ISO 8601), nullable. e.g., "2025-08-19T08:15:30+00:00".
-- startYear: string, nullable.
-- isSupportDocumentRequired: boolean, nullable.
-- amount: string, nullable.
-- regions: string[], non-null.
-- groups: string[], non-null.
-- genders: string[], non-null.
-- nationalities: string[], non-null.
-- campuses: string[], non-null.
+Per-program details:
+- SCHOLARSHIP_PROGRAMS: array<object>, non-null (may be empty). Each item has UPPER_CASE keys:
+  - PROGRAM_ID: integer, nullable.
+  - PROGRAM_CODE: string, nullable.
+  - CAREER: string, nullable.
+  - PLAN: string, nullable.
+  - SUB_PLAN: string, nullable.
+  - DEADLINE: string, nullable.
+  - ACCEPTS_CURRENT_TERM: "1" | "0" | null.
+  - FUND_ACCOUNT_CODE: string, nullable.
+  - SERVICE_INDICATOR_REFERENCE: string, nullable.
+  - SUPPORT_DOCUMENT_DEADLINE: string (Y-m-d), nullable.
+  - TYPE: string, nullable.
+  - FREQUENCY: string, nullable.
+  - VALID_UNTIL: string, nullable.
+  - DECISION_BY: string, nullable.
+  - APPLICATION_ONLINE: "1" | "0" | null.
 
-Nested programs:
-- scholarshipPrograms: array<object>, non-null (may be empty). Each item:
-  - programId: integer, nullable.
-  - programCode: string, nullable.
-  - career: string, nullable.
-  - plan: string, nullable.
-  - subPlan: string, nullable.
-  - deadline: string, nullable.
-  - acceptsCurrentTerm: boolean, nullable.
-  - fundAccountCode: string, nullable.
-  - serviceIndicatorReference: string, nullable.
-  - supportDocumentDeadline: string (Y-m-d), nullable.
-  - type: string, nullable.
-  - frequency: string, nullable.
-  - validUntil: string, nullable.
-  - decisionBy: string, nullable.
-  - applicationOnline: boolean, nullable.
+Note: CamelCase duplicates (e.g., id, title, scholarshipPrograms, etc.) are not included by this endpoint.
 
-### Examples
+## Sorting and paging
 
-Note: Use a relative path; define a base URL in your client if needed.
+- Sorting is deterministic: updatedDate DESC, code ASC, id ASC.
+- hasNext is computed as (offset + limit) < total.
 
-#### List scholarships (curl, Basic auth)
+## Field projection (fields/exclude)
 
-```bash
+- fields: comma-separated list of paths to include. Use dot-notation for nesting and "*" as a wildcard for array/object keys.
+  - Example: fields=TITLE,SCHOLARSHIP_PROGRAMS.*.DEADLINE
+- exclude: comma-separated list of paths to remove after inclusion.
+
+## Examples
+
+List scholarships (Basic auth):
+
+```bat
 curl -X GET "https://<BASE_HOST>/api/v2/scholarships?limit=20&offset=0&search_text=need&updated_from=2025-01-01T00:00:00Z" ^
   -u "YOUR_CLIENT_ID:YOUR_CLIENT_SECRET" ^
   -H "Accept: application/json"
 ```
 
-#### List scholarships (JavaScript fetch, Basic auth)
+JavaScript fetch (Basic auth):
 
 ```javascript
 const creds = btoa('YOUR_CLIENT_ID:YOUR_CLIENT_SECRET');
@@ -181,7 +203,7 @@ const data = await res.json();
 console.log(data);
 ```
 
-#### List scholarships (Python requests, Basic auth)
+Python requests (Basic auth):
 
 ```python
 import requests
@@ -201,7 +223,7 @@ resp.raise_for_status()
 print(resp.json())
 ```
 
-### Example response payload
+Example response (truncated to one item):
 
 ```json
 {
@@ -252,50 +274,23 @@ print(resp.json())
       "IS_APPLICATION_VIEW": false,
       "START_YEAR": "2025",
       "IS_SUPPORT_DOCUMENT_REQUIRED": true,
-      "id": 1234,
-      "code": "MIF-NEED-1",
-      "title": "INSEAD Need-Based Scholarship",
-      "isInseadManaged": true,
-      "isActive": true,
-      "isValid": true,
-      "displayNew": false,
-      "displaySpecialCriteria": "Financial need; strong academics.",
-      "displayDescription": "Scholarship for candidates demonstrating financial need.",
-      "displayEligibility": "Admitted students to MIM or MBA.",
-      "displayAmountAwarded": "Up to €20,000",
-      "isOnline": true,
-      "displayApplicationFormat": "Online application",
-      "displayFooter": null,
-      "displayFileUrl": null,
-      "displayImagePath": null,
-      "displayImageUrl": null,
-      "isApplicationView": false,
-      "updatedDate": "2025-08-18T15:42:10+00:00",
-      "startYear": "2025",
-      "isSupportDocumentRequired": true,
-      "amount": "20000",
-      "regions": ["Europe", "Asia"],
-      "groups": ["Need-based"],
-      "genders": ["All"],
-      "nationalities": ["FRA", "SGP", "USA"],
-      "campuses": ["FR", "SG"],
-      "scholarshipPrograms": [
+      "SCHOLARSHIP_PROGRAMS": [
         {
-          "programId": 101,
-          "programCode": "MIM",
-          "career": "MIM",
-          "plan": "PLAN-A",
-          "subPlan": null,
-          "deadline": "2025-09-01",
-          "acceptsCurrentTerm": true,
-          "fundAccountCode": "FAC-123",
-          "serviceIndicatorReference": "SVC-9",
-          "supportDocumentDeadline": "2025-08-25",
-          "type": "NEED",
-          "frequency": "ANNUAL",
-          "validUntil": "UNTIL_ENROLLMENT",
-          "decisionBy": "ADMISSIONS",
-          "applicationOnline": true
+          "PROGRAM_ID": 101,
+          "PROGRAM_CODE": "MIM",
+          "CAREER": "MIM",
+          "PLAN": "PLAN-A",
+          "SUB_PLAN": null,
+          "DEADLINE": "2025-09-01",
+          "ACCEPTS_CURRENT_TERM": "1",
+          "FUND_ACCOUNT_CODE": "FAC-123",
+          "SERVICE_INDICATOR_REFERENCE": "SVC-9",
+          "SUPPORT_DOCUMENT_DEADLINE": "2025-08-25",
+          "TYPE": "NEED",
+          "FREQUENCY": "ANNUAL",
+          "VALID_UNTIL": "UNTIL_ENROLLMENT",
+          "DECISION_BY": "ADMISSIONS",
+          "APPLICATION_ONLINE": "1"
         }
       ]
     }
@@ -306,14 +301,12 @@ print(resp.json())
 ## Status codes
 
 - 200 OK
-- 400 Bad Request — e.g., invalid datetime format, or updated_from > updated_to.
+- 400 Bad Request — e.g., invalid datetime format, or updated_from > updated_to
 - 401 Unauthorized
 - 403 Forbidden
 - 404 Not Found
 - 500 Internal Server Error
 
-## Behavior notes
+## Diagnostics
 
-- Sorting is deterministic: results are ordered by updatedDate DESC, code ASC, id ASC.
-- hasNext is computed as (offset + limit) < total.
-- Only the parameters listed above are supported here. Aliases: search_text (search, q), updated_from (from), updated_to (to).
+- Add debug=1 to include a debug object with parsed inputs (limit, offset, search, updated_from/updated_to, filters), for troubleshooting only.
